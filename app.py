@@ -76,7 +76,7 @@ async def create_jwt(region: str):
     headers = {
         'User-Agent': USERAGENT, 'Connection': "Keep-Alive", 'Accept-Encoding': "gzip",
         'Content-Type': "application/octet-stream", 'Expect': "100-continue",
-        'X-Unity-Version': "2.112.1", 'X-GA': "v1 1", 'ReleaseVersion': RELEASEVERSION
+        'X-Unity-Version': "2018.4.11f1", 'X-GA': "v1 1", 'ReleaseVersion': RELEASEVERSION
     }
     async with httpx.AsyncClient() as client:
         resp = await client.post(url, data=payload, headers=headers)
