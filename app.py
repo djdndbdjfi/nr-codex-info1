@@ -3,16 +3,12 @@ import time
 import httpx
 import json
 from collections import defaultdict
-from functools import wraps
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from cachetools import TTLCache
-from typing import Tuple
-from proto import FreeFire_pb2, main_pb2, AccountPersonalShow_pb2
-from google.protobuf import json_format, message
-from google.protobuf.message import Message
 from Crypto.Cipher import AES
 import base64
+from google.protobuf import json_format, message
+from proto import FreeFire_pb2, main_pb2, AccountPersonalShow_pb2
 
 # === Settings ===
 MAIN_KEY = base64.b64decode('WWcmdGMlREV1aDYlWmNeOA==')
@@ -24,7 +20,6 @@ SUPPORTED_REGIONS = {"IND", "BR", "US", "SAC", "NA", "SG", "RU", "ID", "TW", "VN
 # === Flask App Setup ===
 app = Flask(__name__)
 CORS(app)
-cache = TTLCache(maxsize=100, ttl=300)
 cached_tokens = defaultdict(dict)
 
 # === Helper Functions ===
@@ -41,7 +36,7 @@ def decode_protobuf(encoded_data: bytes, message_type: message.Message) -> messa
     instance.ParseFromString(encoded_data)
     return instance
 
-async def json_to_proto(json_data: str, proto_message: Message) -> bytes:
+async def json_to_proto(json_data: str, proto_message: message.Message) -> bytes:
     json_format.ParseDict(json.loads(json_data), proto_message)
     return proto_message.SerializeToString()
 
@@ -80,7 +75,7 @@ async def create_jwt(region: str):
     }
     async with httpx.AsyncClient() as client:
         resp = await client.post(url, data=payload, headers=headers)
-        msg = json.loads(json_format.MessageToJson(decode_protobuf(resp.content, FreeFire_pb2.LoginRes)))
+        msg = json.loads(json_format.MessageToJson(decode_protobuf(resp.content, FreeFire_pb2.LoginRes()))
         cached_tokens[region] = {
             'token': f"Bearer {msg.get('token','0')}",
             'region': msg.get('lockRegion','0'),
@@ -97,7 +92,7 @@ async def refresh_tokens_periodically():
         await asyncio.sleep(25200)
         await initialize_tokens()
 
-async def get_token_info(region: str) -> Tuple[str, str, str]:
+async def get_token_info(region: str):
     info = cached_tokens.get(region)
     if info and time.time() < info['expires_at']:
         return info['token'], info['region'], info['server_url']
@@ -105,10 +100,32 @@ async def get_token_info(region: str) -> Tuple[str, str, str]:
     info = cached_tokens[region]
     return info['token'], info['region'], info['server_url']
 
-async def GetAccountInformation(uid, unk, region, endpoint):
-    region = region.upper()
-    if region not in SUPPORTED_REGIONS:
-        raise ValueError(f"Unsupported region: {region}")
+async def get_player_region(uid: str):
+    """Get player's region by UID using shop2game API"""
+    url = "https://shop2game.com/api/auth/player_id_login"
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36",
+    }
+    payload = {
+        "app_id": 100067,
+        "login_id": uid,
+        "app_server_id": 0,
+    }
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(url, headers=headers, json=payload)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get('region', '').upper()
+    return ""
+
+async def GetAccountInformation(uid, unk, endpoint):
+    # First detect the region from UID
+    region = await get_player_region(uid)
+    if not region or region not in SUPPORTED_REGIONS:
+        raise ValueError(f"Could not determine valid region for UID: {uid}")
+    
     payload = await json_to_proto(json.dumps({'a': uid, 'b': unk}), main_pb2.GetPlayerPersonalShow())
     data_enc = aes_cbc_encrypt(MAIN_KEY, MAIN_IV, payload)
     token, lock, server = await get_token_info(region)
@@ -168,17 +185,16 @@ def format_response(data):
 
 # === API Routes ===
 @app.route('/player-info')
-def get_account_info():
-    region = request.args.get('region')
+async def get_account_info():
     uid = request.args.get('uid')
-    if not uid or not region:
-        return jsonify({"error": "Please provide UID and REGION."}), 400
+    if not uid:
+        return jsonify({"error": "Please provide UID."}), 400
     try:
-        return_data = asyncio.run(GetAccountInformation(uid, "7", region, "/GetPlayerPersonalShow"))
+        return_data = await GetAccountInformation(uid, "7", "/GetPlayerPersonalShow")
         formatted = format_response(return_data)
         return jsonify(formatted), 200
     except Exception as e:
-        return jsonify({"error": "Invalid UID or Region. Please check and try again."}), 500
+        return jsonify({"error": f"Invalid UID or could not fetch data: {str(e)}"}), 500
 
 @app.route('/refresh', methods=['GET', 'POST'])
 def refresh_tokens_endpoint():
