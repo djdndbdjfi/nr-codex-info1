@@ -9,3 +9,4 @@ requests
 apscheduler
 Pillow
 google
+flask[async]

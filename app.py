@@ -3,7 +3,6 @@ import time
 import httpx
 import json
 from collections import defaultdict
-from functools import wraps
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from cachetools import TTLCache
@@ -19,7 +18,7 @@ MAIN_KEY = base64.b64decode('WWcmdGMlREV1aDYlWmNeOA==')
 MAIN_IV = base64.b64decode('Nm95WkRyMjJFM3ljaGpNJQ==')
 RELEASEVERSION = "OB49"
 USERAGENT = "Dalvik/2.1.0 (Linux; U; Android 13; CPH2095 Build/RKQ1.211119.001)"
-SUPPORTED_REGIONS = {"IND", "BR", "US", "SAC", "NA", "SG", "RU", "ID", "TW", "VN", "TH", "ME", "PK", "CIS", "BD", "EUROPE"}
+SUPPORTED_REGIONS = {"IND", "BR", "US", "SAC", "NA", "SG", "RU", "ID", "TW", "VN", "TH", "ME", "PK", "CIS", "BD", "EU"}
 
 # === Flask App Setup ===
 app = Flask(__name__)
@@ -105,10 +104,16 @@ async def get_token_info(region: str) -> Tuple[str, str, str]:
     info = cached_tokens[region]
     return info['token'], info['region'], info['server_url']
 
+async def get_region_by_uid(uid: str) -> str:
+    """Fetch player region using external API"""
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(f"https://nr-codex-region.vercel.app/region?uid={uid}")
+        if resp.status_code != 200:
+            raise ValueError("Failed to fetch region")
+        data = resp.json()
+        return data.get("region", "").upper()
+
 async def GetAccountInformation(uid, unk, region, endpoint):
-    region = region.upper()
-    if region not in SUPPORTED_REGIONS:
-        raise ValueError(f"Unsupported region: {region}")
     payload = await json_to_proto(json.dumps({'a': uid, 'b': unk}), main_pb2.GetPlayerPersonalShow())
     data_enc = aes_cbc_encrypt(MAIN_KEY, MAIN_IV, payload)
     token, lock, server = await get_token_info(region)
@@ -168,17 +173,24 @@ def format_response(data):
 
 # === API Routes ===
 @app.route('/player-info')
-def get_account_info():
-    region = request.args.get('region')
+async def get_account_info():
     uid = request.args.get('uid')
-    if not uid or not region:
-        return jsonify({"error": "Please provide UID and REGION."}), 400
+    if not uid:
+        return jsonify({"error": "Please provide UID."}), 400
+    
     try:
-        return_data = asyncio.run(GetAccountInformation(uid, "7", region, "/GetPlayerPersonalShow"))
+        # Get region from external API
+        region = await get_region_by_uid(uid)
+        if not region or region not in SUPPORTED_REGIONS:
+            return jsonify({"error": "Invalid region or unsupported region"}), 400
+        
+        # Get account information
+        return_data = await GetAccountInformation(uid, "7", region, "/GetPlayerPersonalShow")
         formatted = format_response(return_data)
         return jsonify(formatted), 200
+    
     except Exception as e:
-        return jsonify({"error": "Invalid UID or Region. Please check and try again."}), 500
+        return jsonify({"error": "Invalid UID or server error. Please try again."}), 500
 
 @app.route('/refresh', methods=['GET', 'POST'])
 def refresh_tokens_endpoint():
@@ -194,5 +206,7 @@ async def startup():
     asyncio.create_task(refresh_tokens_periodically())
 
 if __name__ == '__main__':
-    asyncio.run(startup())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(startup())
     app.run(host='0.0.0.0', port=5000, debug=True)
