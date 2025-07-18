@@ -1,9 +1,9 @@
 {
-"builds": [
-{ "src": "app.py", "use": "@vercel/python" }
-],
-"routes": [
-{ "src": "/(.*)", "dest": "app.py" }
-],
-"regions": ["bom1"]
+  "builds": [
+    { "src": "app.py", "use": "@vercel/python" }
+  ],
+  "routes": [
+    { "src": "/(.*)", "dest": "app.py" }
+  ],
+  "regions": ["sin1"]
 }
