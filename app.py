@@ -172,7 +172,7 @@ def format_response(data):
     }
 
 # === API Routes ===
-@app.route('/player-info')
+@app.route('/get')
 async def get_account_info():
     uid = request.args.get('uid')
     if not uid:
